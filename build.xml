@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="NI Architecture Viewer GAE Port" default="default" basedir=".">
+	<property name="lib.dest" value="/Users/agriffiths/git/2902093" />
+	<property name="lib.src" value="." />
+	<property name="libs.dest" value="war/2902093" />
+	<target name="default">
+	</target>
+	<target name="copy">
+        <copy todir="${lib.dest}" overwrite="true">        	
+             <fileset file="d2v.js" />
+            <fileset file="d3v.js" />
+        </copy>
+	</target>
+</project>
+
