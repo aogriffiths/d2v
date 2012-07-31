@@ -1,7 +1,97 @@
-//V1
+/*
+ * var body = d3.select("body");
+ * 
+ * 
+ * vs = new viewset();
+ *
+ * vs.addview("one")
+ *  .elem("div.eg1")
+ *    .elem("p")
+ *      .elem("b")
+ *        .text("Hello World");
+ *    
+ * vs.addview("two")
+ *  .elem("div.eg1")
+ *    .elem("p")
+ *      .elem("i")
+ *        .text("Hello World");
+ *  
+ * vs.addview("three")
+ *  .elem("div.eg1")
+ *    .elem("p")
+ *      .elem("u")
+ *        .text("Hello World");
+ *
+ * vs.mode("loop"); // loop | sequenced | named
+ * vs.drawinto(body);
+ * 
+ * v4 = new view()
+ *  .elem("div.eg2")
+ *    .elem("div.top")
+ *      .lookupview("top")
+ *      .close()
+ *    .elem("div#bottom")
+ *      .lookupview("bottom")
+ *      .close()
+ *      
+ * v4
+ *    .setview("top",v1)
+ *    .setview("bottom",v2);
+ *    
+ * v4.drawinto(body);
+ * 
+ * v4
+ *    .setview("bottom",v3);
+ *    
+ * v4.redraw();
+ */
+
+if (!Array.prototype.filter)
+{
+  Array.prototype.filter = function(fun /*, thisp */)
+  {
+    "use strict";
+
+    if (this == null)
+      throw new TypeError();
+
+    var t = Object(this);
+    var len = t.length >>> 0;
+    if (typeof fun != "function")
+      throw new TypeError();
+
+    var res = [];
+    var thisp = arguments[1];
+    for (var i = 0; i < len; i++)
+    {
+      if (i in t)
+      {
+        var val = t[i]; // in case fun mutates this
+        if (fun.call(thisp, val, i, t))
+          res.push(val);
+      }
+    }
+
+    return res;
+  };
+}
 
 function viewset(){
   this._views = {};
+  this._views_count = 0;
+  this._views_order = [];
+  this._drawmode = "sequenced";
+ }
+//sequence | loop |  first
+viewset.prototype.drawmode = function(drawmode) {
+  if (arguments.length == 0)
+    return this._drawmode;
+  this._drawmode = drawmode;
+  return this;
+}
+
+viewset.prototype.viewlist = function() {
+    return this._views_order;
 }
 
 viewset.prototype.view = function(name, v) {
@@ -9,49 +99,129 @@ viewset.prototype.view = function(name, v) {
     return this._views;
   if (arguments.length == 1)
     return this._views[name];
+  //TODO account for two views being added with the same name...
   this._views[name] = v;
+  this._views_order.push(v);
+  this._views_count++;
   return this;
 }
 
-viewset.prototype.addnewview = function(name) {
+viewset.prototype.addview = function(name) {
   var v = new view();
+  v.name(name);
+  this.view(name,v)
+  return v;
+}
+
+viewset.prototype.clonenewview = function(name, fromname) {
+  var v = this.view(fromname);
+  v = v.clone();
+  v.name(name);
   this.view(name,v);
   return v;
 }
 
-viewset.prototype.clonenewview = function(name, newname) {
-  var v = this.view(name);
+viewset.prototype.clonelastview = function(name) {
+  var v = this._views_order[this._views_order.length-1];
+  if(v==null){
+    v = this.addview(name);
+  }
   v = v.clone();
-  this.view(newname,v);
+  v.name(name);
+  this.view(name,v);
   return v;
 }
 
-function view(clonefrom) {
+viewset.prototype.drawinto = function(sel) {
+  var timeout = 0;
+  var views = this._views_order;
+  var drawmode = this.drawmode();
+  if(views.length > 0){
+    var i = 0;
+    function dodraw(){
+      v = views[i];
+      v.drawinto(sel);
+      i ++;
+      if(drawmode == "sequenced-loop" && (!views[i]) ){
+        i = 0;
+      }
+      if(views[i] && (drawmode.indexOf("sequenced") == 0)){
+        setTimeout(dodraw,v.duration());
+      }
+    }  
+    dodraw();
+  }
+}
+
+
+function view(clonefrom,jumptoviews) {
   if (!(this instanceof arguments.callee))
-    return new view(); // allows dropping of the "new" keyword
+    return new view(clonefrom); // allows dropping of the "new" keyword
 
   //Clone needs to handle these in a particular way
   this._parent_view = null; //TODO
-  this._children  = clonefrom ? clone(clonefrom._children) : {};//TODO
+  this._children = {};
+  this._name = clonefrom ? clonefrom._name : "";
+  this._last_parent_selection = clonefrom ? clonefrom._last_parent_selection : null;
+  this._jumptoviews = jumptoviews? jumptoviews : {};
+
+  //Slots
+  this._own_slots = {}; //this map will get filled below;
+  this._child_slots = {}; //cloning the children will recreate _child_slots in their parents.
+  
+
+  if(clonefrom){
+    for(var name in clonefrom._children){
+      var child = clonefrom._children[name];
+      var newchild = new view(child,this._jumptoviews);
+      
+      newchild._parent_view = this;
+      this._jumptoviews[newchild._selector] = newchild;
+      this._children[name] = newchild;
+    }
+    for(var name in clonefrom._own_slots){
+      this.openslot(name);
+    }
+  }
+  
+  
 
   //Clone makes new copies of these
-  this._selector    = clonefrom ? clone(clonefrom._selector)    : null;
-  this._text        = clonefrom ? clone(clonefrom._text)        : null;
-  this._attr        = clonefrom ? clone(clonefrom._attr)        : {};
-  this._style       = clonefrom ? clone(clonefrom._style)       : {};
-  this._each        = clonefrom ? clone(clonefrom._each)        : [];
+  this._i           = clonefrom ? clonefrom._i                  : 0;
+  this._selector    = clonefrom ? clonefrom._selector           : null;
+  
+  this._todo        = clonefrom ? clone(clonefrom._todo)        : [];
+  this._todo_keyed  = clonefrom ? clone(clonefrom._todo_keyed)  : {};
+  this._default_duration        = clonefrom ? clonefrom._default_duration  : 1000;
+  
   this._transitiondefs = clonefrom ? clone(clonefrom._transitiondefs) : [];
   this._cascade_transitiondefs = clonefrom ? clone(clonefrom._cascade_transitiondefs) : [];
 
   //Clone points to the same copies of these
   this._data        = clonefrom ? clonefrom._data               : null;
+  this._data_key    = clonefrom ? clonefrom._data_key              : null;
   this._selection   = clonefrom ? clonefrom._selection          : null;
 }
 
-view.prototype.data = function(data) {
+view.prototype.data = function(data, data_key) {
   if (!arguments.length)
     return this._data;
   this._data = data;
+  this._data_key = data_key;
+  return this;
+}
+
+view.prototype.name = function(name) {
+  if (!arguments.length)
+    return this._name;
+  this._name = name;
+  return this;
+}
+
+view.prototype.duration = function(default_duration) {
+  if (!arguments.length)
+    return this._default_duration;
+  this._default_duration = default_duration;
   return this;
 }
 
@@ -59,13 +229,16 @@ view.prototype.parent = function(parent_view) {
   if (!arguments.length)
     return this._parent_view;
   this._parent_view = parent_view;
+  
   return this;
 }
 
 view.prototype.selector = function(selector) {
   if (!arguments.length)
     return this._selector;
+  delete this._jumptoviews[this._selector];
   this._selector = selector;
+  this._jumptoviews[selector] = this;
   return this;
 }
 
@@ -89,38 +262,113 @@ view.prototype.toString = function() {
   return this._selector;
 };
 
-view.prototype.attr = function(name, value) {
-  if (arguments.length == 0)
-    return this._attr;
-  if (arguments.length == 1)
-    return this._attr[name];
+view.prototype.addtodo = function(type, name, value) {
+  var key = type + "_" + name;
+  if (arguments.length < 2)
+    return;
+  if (arguments.length == 2 || value == undefined ){
+    this._todo_keyed[key];
+    return;
+  }
+  if (arguments.length == 3){
+    var currentvalue = this._todo_keyed[key];
+    if(currentvalue){
+      var i = 0;
+      for(var value_todo; value_todo = this._todo[i]; i++){
+        if(currentvalue == value_todo){
+          delete this._todo[i];
+          break;
+        }
+      }
+    }
+    var td = {
+        type:type,
+        name:name,
+        value:value        
+      }
+    this._todo.push(td);
+    this._todo_keyed[key] = td;
+    return this;
+  }
+}
 
-  this._attr[name] = value;
+
+view.prototype.jumptoviews = function(jumptoviews) {
+  if (!arguments.length)
+    return this._jumptoviews;
+  this._jumptoviews = jumptoviews;
+  return this;
+}
+
+view.prototype.jumpto = function(elemname) {
+  return this._jumptoviews[elemname];
+}
+
+view.prototype.remove = function() {
+  delete this._parent_view._children[this._selector];
+}
+
+
+view.prototype.attr = function(name, value) {
+  this.addtodo("attr", name, value);
   return this;
 }
 
 view.prototype.style = function(name, value) {
-  if (arguments.length == 0)
-    return this._style;
-  if (arguments.length == 1)
-    return this._style[name];
-  this._style[name] = value; 
+  this.addtodo("style", name, value);
+  return this;
+}
+
+view.prototype.on = function(name, fn) {
+  this.addtodo("on", name, fn);
   return this;
 }
 
 view.prototype.text = function(value) {
-  if (arguments.length == 0)
-    return this._text;
-
-  this._text = value;
+  this.addtodo("text", "text", value);
   return this;
 }
 
-view.prototype.each = function(value) {
-  if (arguments.length == 0)
-    return this._each;
+view.prototype.call = function(value) {
+  this.addtodo("call", "call", value);
+  return this;
+}
 
-  this._each.push(value); // TO CHECK
+view.prototype.each = function(value, name) {
+  this.addtodo("each", name || ++this._i, value);
+  return this;
+}
+
+view.prototype.view = function(value, name) {
+  this.addtodo("view", name || ++this._i, value);
+  return this;
+}
+
+view.prototype.openslot = function(name) {
+  var childslot = {
+    name: name,
+    view: this
+  }
+  this._own_slots[name] = true; 
+  var view = this._parent_view;
+  while(view){
+    view._child_slots[name] = childslot; 
+    view = view._parent_view;
+  }
+  return this;
+}
+
+view.prototype.fillslot = function(name, view) {
+  var slotview = null;
+  if(this._own_slots[name]){
+    slotview = this;
+  }else{
+    slotview = this._child_slots[name];
+  }
+  if(!slotview) throw "no such slot " +  name;
+  
+  slotview.view.view(view,name);
+
   return this;
 }
 
@@ -128,7 +376,12 @@ view.prototype.elem = function(selector,uid) {
   var child;
   child = this._children[uid || selector];
   if (! child) {
-    child = view().parent(this).selector(selector);
+    child = view()
+             .jumptoviews(this.jumptoviews())
+             .parent(this)
+             .selector(selector)
+             .duration(this._default_duration);
+
     this._children[uid || selector] = child
   }
   return child;
@@ -139,7 +392,7 @@ view.prototype.close = function() {
 }
 
 view.prototype.clone = function() {  
-  return clone(this);
+  return new view(this);
 }
 
 view.prototype.chart = function() {  
@@ -148,52 +401,53 @@ view.prototype.chart = function() {
     that.drawinto(selection);
   };
 }
+/*
+ *   Drawns this view into a d3 "parent" selection .
+ *   If the parent selection previously had a view drawn into it the old view will 
+ * be transitioned to the new.
+ *   To avoid elements of an old view being removed when the newview is drawn in
+ * ensure the newview is created as a clone of the oldview and adapted form there.
+ *   
+ * 
+ */
+view.prototype.drawinto = function(selection) {
 
-view.prototype.drawinto = function(parent_selection) {
-  var selection;
-  if(this._selector){
-    selection = select_or_create(parent_selection, this._selector, this._data != null, this._data)
-  }else{
-    selection = parent_selection;
+  //get previous view from the selection "__view__" variable
+  //and set this view as the new view in the "__view__" variable.
+  //this allows for effiencet ew and the from view) and also simple redraw()'ing
+  //becuase a selection is given a link to the view that was used to draw it.
+  
+  //Take the first view as the from view, assume they are all the same
+  var fromview = null;  
+  var ele = selection[0][0];
+  if(ele && ele.__view__) {
+    fromview = ele.__view__;
   }
   
-  //get previous view
-  var fromview;
+  //Set this as the view for all elements, the view can then be discovered from any element later on
   for(var i = 0; i < selection.length; i++){
     for(var j = 0; j < selection[i].length; j++){
-       var ele =  selection[i][j];
-       if(! fromview ) fromview = ele.__view__ //Take the first view as the from view, assume they are all the same
-       ele.__view__ = this; //Set this as the view for all elements, the view can then be discovered from any element later on
+      if(ele) //TODO SHOULD THERE NOT ALWAYS BE AN ELE here? SOMETHIng to do with when elements are removed?
+      ele.__view__ = this;
     }
   }
-  
-  
-/*
-  if(transitioncallback != undefined && false){
-    transitionselection = transitioncallback(selection);
-  }else{
-    transitionselection = selection;
-  }
-  */
-  if(this._text != null){
-    selection.text(this._text);
-  }
-  for(var i = 0, each; each = this._each[i]; i++){
-    selection.each(each);
-  }
-  
-  var transitiondefs = clone(this._transitiondefs)
-  var lasttransition = null;
+    
+  var transitiondefs   = clone(this._transitiondefs);
+  var default_duration = this._default_duration;
+  var lasttransition   = null;
   
   function findtransitionselection(selector, type, name, crud){
-    var itemid = selector + ":" + type + ":" + name;
     var transition = null;
     for(var i = transitiondefs.length-1; i>=0; i--){
       var transitiondef = transitiondefs[i];
+      var itemid
+         = transitiondef.item_match.source.indexOf(':') === -1
+         ? name
+         : selector + ":" + type + ":" + name;
       if(itemid.match(transitiondef.item_match)){
         if(crud.match(transitiondef.crud_match)){
           //Try to reuse a transitionselection from this transition
-          if(transitiondef.transitionselection){
+          if(transitiondef.transition){
             transition = transitiondef.transition;
             return transition;
           }else{ //, otherwise create a new one
@@ -204,7 +458,8 @@ view.prototype.drawinto = function(parent_selection) {
                 transition = lasttransition.transition();              
               }
             }
-            transitiondef.callback(transition);
+            transition.duration(default_duration);
+            if(transitiondef.callback) transitiondef.callback(transition);
             if(! transitiondef.flags.match(/C/i)){ // C => "combined"
               break;
             }            
@@ -221,36 +476,57 @@ view.prototype.drawinto = function(parent_selection) {
     }
   }
   
-  for(var name in this._attr){
-    var crud;
-    if(fromview && fromview.attr(name) != null){
-      crud = "U";
-    }else{
-      crud = "C";
+  for(var i = 0, todo; todo = this._todo[i]; i++){
+    switch (todo.type) {    
+      case "text":
+      case "call":
+      case "each":{
+        selection[todo.type](todo.value);
+        break;
+      }
+      case "on":{
+        selection[todo.type](todo.name,todo.value);
+        break;
+      }      case "style":  
+        if(todo.value == "orange"){
+          null;
+        }
+      case "attr":{
+        var crud;
+        if(fromview && fromview[todo.type](todo.name) != null){
+          crud = "U";
+        }else{
+          crud = "C";
+        }
+        var sel2 = findtransitionselection(this._selector, todo.type, todo.name, crud)
+        sel2[todo.type](todo.name,todo.value);        
+        break;
+      }
+      case "view":{
+        todo.value.drawinto(selection);
+      }
+      case "slot":{
+        todo.value.drawinto(selection);
+      }
     }
-    findtransitionselection(this._selector, "attr", name, crud)
-      .attr(name, this._attr[name]);
   }
 
-  for(var name in this._style){
-    var crud;
-    if(fromview && fromview.style(name) != null){
-      crud = "U";
-    }else{
-      crud = "C";
-    }
-    findtransitionselection(this._selector, "style", name, crud)
-      .style(name, this._style[name]);
+  var fromchildren = fromview  ? clone(fromview._children) : [];
+  for(var key in this._children){
+    delete fromchildren[key];
+    var child = this._children[key];    
+    var childselection = select_or_create(selection, child._selector, child._data != null, child._data, child._data_key)    
+    child.drawinto(childselection);
+  }
+  for(var key in fromchildren){
+    selection.select(fromchildren[key].selector()).remove();
   }
   
-  for(var key in this._children){
-    var child = this._children[key];
-    child.drawinto(selection);
-  }
+  //console.debug(this._selector + " from-children left " + fromchildren.toString());
 }
 
 
-function select_or_create(parent, selector, multi, data) {
+function select_or_create(parent, selector, multi, data, data_key) {
   if(selector[0] == "#" || selector[0] == ".")
     throw "select_or_create selector must not start with . or #";
   var id_sel, class_sel, element_sel;
@@ -279,7 +555,11 @@ function select_or_create(parent, selector, multi, data) {
           newsel.attr("class", class_sel);
       }
     } else {
-      newsel = parent.selectAll(selector).data(data);
+      if(data_key){
+        newsel = parent.selectAll(selector).data(data, data_key);        
+      }else{
+        newsel = parent.selectAll(selector).data(data);
+      }
       newsel.enter().append(element_sel);
       newsel.exit().remove();
       if(id_sel)
@@ -289,14 +569,26 @@ function select_or_create(parent, selector, multi, data) {
     }
 
   } else {
-    var newsel = parent.select(selector);
+    newsel = parent.select(selector);
     if(newsel.empty()) {
       newsel = parent.append(element_sel);
       if(id_sel)
         newsel.attr("id", id_sel);
       if(class_sel)
         newsel.attr("class", class_sel);
-    }
+    }else{
+      for(var i=0;i<newsel[0].length;i++){
+        sel=newsel[0][i];
+        if(sel==null){
+          var ele = d3.select(parent[0][i]).append(element_sel)
+          if(id_sel)
+            ele.attr("id", id_sel);
+          if(class_sel)
+            ele.attr("class", class_sel);
+        }
+      }
+      newsel = parent.select(selector);
+    }   
   }
 
   return newsel;

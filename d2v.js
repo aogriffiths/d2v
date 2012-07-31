@@ -158,6 +158,9 @@ function MyMin(){
 /****************************************/
 
 function Arrangement(turnoffdefaults) {
+  if (!(this instanceof arguments.callee))
+    return new Arrangement(turnoffdefaults); // allows dropping of the "new" keyword
+  
   //this._data=null;
   this._name=null;
   this._arrangementsDependantOn={};
@@ -307,11 +310,11 @@ Arrangement.prototype.arrange = function(data){
       if(calculator instanceof Array){
         value = [];
         for(var k = 0; k < calculator.length; k++){
-          value.push(calculator[k].call(this, cell, i, dim, k));
+          value.push(calculator[k].call(this, cell, i, dim, k, collection));
           cell.setDim(dim, value);
         }
       }else{
-        value = calculator.call(this, cell, i, dim);
+        value = calculator.call(this, cell, i, dim, 0, collection);
         cell.setDim(dim, value);
       }
       
@@ -321,8 +324,53 @@ Arrangement.prototype.arrange = function(data){
   return collection;
 }
 
+C_translate_y = function(d,i){
+  return "translate(0," + d.getDim("y")[0] + ")";
+};
 
+C_translate_x = function(d,i){
+  return "translate(" + d.getDim("x")[0] + ",0)";
+};
 
+C_translate = function(d,i){
+  return "translate(" + d.getDim("x")[0] +"," + d.getDim("y")[0] + ")";
+};
+
+C_height = function(d,i){
+  return  d.getDim("height");
+};
+
+C_width = function(d,i){
+  return  d.getDim("width");
+};
+
+C_square = function(d,i){
+  return  Math.min(d.getDim("width"),d.getDim("height"));
+};
+
+C_half_height = function(d,i){
+  return  d.getDim("height") / 2;
+};
+
+C_half_width = function(d,i){
+  return  d.getDim("width") / 2;
+};
+
+C_sum = function(f1,f2){
+  var ff1 = d3.functor(f1);
+  var ff2 = d3.functor(f2);
+  return function(d,i){
+    return ff1(d,i) + ff2(d,i)
+  }
+};
+
+C_prod = function(f1,f2){
+  var ff1 = d3.functor(f1);
+  var ff2 = d3.functor(f2);
+  return function(d,i){
+    return ff1(d,i) * ff2(d,i)
+  }
+};
 
 function CellCalculator() {}
 CellCalculator.prototype.calc = function(cell,i){};
@@ -342,7 +390,7 @@ function Constant(value) {
   this.value  = value  ? value  : 0;
 }
 
-Constant.prototype = new Constant();  // inherit CellCalculatorFactory  
+Constant.prototype = new CellCalculatorFactory();  // inherit CellCalculatorFactory  
 Constant.prototype.constructor = Increment;        // correct the constuctor  
 
 /**
@@ -393,12 +441,16 @@ function Stringer(value) {
   this.value = value  ? value  : "";
   var regex = /\{.*?\}/ig; 
   var allmatches = value.match(regex);
-  this.toReplace = {};
+  this.toReplace = [];
   for(var i = 0, match; match = allmatches[i]; i++){
     var keys = match.replace("{","");
     keys = keys.replace("}","");
     keys = keys.split(".");
-    this.toReplace[match] = keys;
+    r = {
+        "match":match,
+        "keys":keys
+    }
+    this.toReplace.push(r);
   }
 }
 
@@ -413,9 +465,9 @@ Stringer.prototype.make = function(){
 
   return function(cell, i, dim, j){
     res = that.value;
-    for(replace in that.toReplace){
-        var value = cell.getDim(that.toReplace[replace]);
-        res = res.replace(replace,value);
+    for(var i = 0, r; r =  that.toReplace[i]; i++){
+        var value = cell.getDim(r.keys);
+        res = res.replace(r.match,value);
     }
     return res;
   }
@@ -474,15 +526,24 @@ Project.prototype.make = function(){
 
   return function(cell, i, dim, j){
     if(scale==null){
-      var from_range;
+      var from_range, to_range;
       if(that._from instanceof Array){
         from_range = that._from;
       }else{
         from_range = cell.col().dimsrange[that._from];
       }
+      if(that._to instanceof Array){
+        to_range = that._to;
+      }else{
+        to_range = cell.col().dimsrange[that._to];
+      }
       scale = d3.scale.linear()
        .domain(from_range)
-       .range(that._to);
+       .range(to_range);
+    }
+    if(! (that._to  instanceof Array)){
+      to_range = cell.getDim(that._to);
+      scale.range(to_range);
     }
     from_dims = cell.getDim(that._from);
     to_dim = [];
@@ -527,6 +588,89 @@ Project.prototype.gutter = function(gutter){
   this._gutter = gutter;
   return this;
 };
+
+
+////
+/**
+ * Grow
+ * @constructor
+ * @return {Stringer}
+ */
+function Grow(from) {  
+  if (!(this instanceof arguments.callee)) return new Grow(from); //allows dropping of the "new" keyword
+  CellCalculatorFactory.call(this);  // Call the parent constructor  
+  this._from = from ? from : null;
+  this._start = 0;
+  this._increment = 1;
+  this._gutter = [0,0];
+}
+
+Grow.prototype = new CellCalculatorFactory();  // inherit CellCalculatorFactory  
+Grow.prototype.constructor = Grow;        // correct the constuctor  
+
+/**
+ * @return {CellCalculator}
+ */
+Grow.prototype.make = function(){
+  var that = this;
+
+  return function(cell, i, dim, j){
+    from_dims = cell.getDim(that._from);
+    to_dim = [];
+    for(var i = 0; i < from_dims.length; i++){
+      var from_dim = from_dims[i]
+      var gutter = that._gutter[i];
+      to_dim.push(that._start + (from_dim * that._increment) + gutter);
+    }
+    return to_dim;
+  }
+};
+
+/**
+ * start
+ * @param {Array} to
+ * @return {Project}
+ */
+Grow.prototype.start = function(start){
+  if (!arguments.length) return this._start;
+  this._start = start;
+  return this;
+};
+
+/**
+ * increment
+ * @param {Array} to
+ * @return {Project}
+ */
+Grow.prototype.increment = function(increment){
+  if (!arguments.length) return this._increment;
+  this._increment = increment;
+  return this;
+};
+
+/**
+ * from
+ * @param {Array} from
+ * @return {Project}
+ */
+Grow.prototype.from = function(from){
+  if (!arguments.length) return this._from;
+  this._from = from;
+  return this;
+};
+
+/**
+ * gutter
+ * @param {Array} from
+ * @return {Project}
+ */
+Grow.prototype.gutter = function(gutter){
+  if (!arguments.length) return this._gutter;
+  this._gutter = gutter;
+  return this;
+};
+
+
 
 
 
@@ -602,14 +746,14 @@ IncrementOnChange.prototype.make = function(){
 };
 
 /**
- * Will return an integer starting ar "start", incrementing by "step" each time "field" changes.
+ * Will return an integer starting ar "start", incrementing by "step" for each unique "field".
  */
 function IncrementOnUnique(field, step, start) {  
   if (!(this instanceof arguments.callee)) return new IncrementOnUnique(field, step, start); //allows dropping of the "new" keyword
-  IncrementOnChange.call(this, step, start);  // Call the parent constructor  
+  IncrementOnChange.call(this, field, step, start);  // Call the parent constructor  
 }  
 
-IncrementOnUnique.prototype = new IncrementOnChange();  // inherit CellCalculatorFactory  
+IncrementOnUnique.prototype = new IncrementOnChange();  // inherit IncrementOnChange  
 IncrementOnUnique.prototype.constructor = IncrementOnUnique;        // correct the constuctor  
 
 /**
@@ -633,6 +777,91 @@ IncrementOnUnique.prototype.make = function(){
   }
 };
 
+
+/**
+ * Will Sort
+ */
+function Sorter(sorter) {  
+  if (!(this instanceof arguments.callee)) return new Sorter(sorter); //allows dropping of the "new" keyword
+  this._sorter = sorter;
+}  
+
+Sorter.prototype = new CellCalculatorFactory();  // inherit CellCalculatorFactory  
+Sorter.prototype.constructor = Sorter;        // correct the constuctor  
+
+/**
+ * @return {CellCalculator}
+ */
+Sorter.prototype.make = function(){
+  var that = this;
+  var tosort = true;
+  var a =[];
+  function dosort(collection){
+    for(var i =0, cell; cell = collection.cells[i]; i++){
+      a.push(cell);
+    }
+    a = a.sort(that._sorter);
+    tosort=false;
+  }
+  function getpos(cell){
+    for(var i = 0; i < a.length; i++){
+      if(a[i]==cell) return i;
+    }
+  }
+  return function(cell, i, dim, k, collection){
+    if(tosort) dosort(collection);
+    return getpos(cell);
+  }
+};
+
+
+/**
+ * Will Sort
+ */
+function SorterUnique(sorter, field) {  
+  if (!(this instanceof arguments.callee)) return new SorterUnique(sorter, field); //allows dropping of the "new" keyword
+  this._sorter = sorter;
+  this._field = field;
+}  
+
+SorterUnique.prototype = new CellCalculatorFactory();  // inherit CellCalculatorFactory  
+SorterUnique.prototype.constructor = SorterUnique;        // correct the constuctor  
+
+/**
+ * @return {CellCalculator}
+ */
+SorterUnique.prototype.make = function(){
+  var that = this;
+  var tosort = true;
+  var b ={};
+  function dosort(collection){
+    for(var i = 0, cell; cell = collection.cells[i]; i++){
+      var key = that._field(cell);
+      if(!b[key]) b[key]=[];
+      b[key].push(cell);
+    }
+    for(var key in b){
+      b[key] = b[key].sort(that._sorter);
+    }    
+    tosort=false;
+  }
+  function getpos(cell){
+    var key = that._field(cell);
+    for(var i = 0; i < b[key].length; i++){
+      if(b[key][i]==cell) return i;
+    }
+  }
+  return function(cell, i, dim, k, collection){
+    if(tosort) dosort(collection);
+    return getpos(cell);
+  }
+};
+
+
+
+
+
+
 /**
  * Will Sum two CellCalculators
  */
@@ -651,8 +880,8 @@ SumFn.prototype.constructor = SumFn;        // correct the constuctor
  * @return {CellCalculator}
  */
 SumFn.prototype.make = function(){
-  var cc1 = this.f1.make();
-  var cc2 = this.f2.make();
+  var cc1 = f1 instanceof CellCalculatorFactory ? this.f1.make() : d3.functor(f1);
+  var cc2 = f2 instanceof CellCalculatorFactory ? this.f2.make() : d3.functor(f2);
   
   return function(cell,i){
     return cc1(cell,i) + cc2(cell,i);
@@ -714,6 +943,7 @@ function Allign() {
   if (!(this instanceof arguments.callee)) return new Allign(); //allows dropping of the "new" keyword
   CellCalculatorFactory.call(this);  // Call the parent constructor
   this._toLayout = null;
+  this._toCellsCollection = null;
   this._matchTo = null;
   this._matchFrom = null;
   this._dims = [];
@@ -730,6 +960,17 @@ Allign.prototype.constructor = SumFn;        // correct the constuctor
 Allign.prototype.toLayout = function(toLayout) {
   if (!arguments.length) return this._toLayout;
   this._toLayout = toLayout;
+  return this;
+};
+
+/**
+ * Set or Get the CellsCollection to be alligned to
+ * @param {Layout} toLayout  
+ * @return {Allign}
+ */
+Allign.prototype.toCells = function(toCellsCollection) {
+  if (!arguments.length) return this._toCellsCollection;
+  this._toCellsCollection = toCellsCollection;
   return this;
 };
 
@@ -785,7 +1026,8 @@ Allign.prototype.make = function(){
   var that = this;
   var ranges = {};
   //The collection of cells being alligned to
-  var collection = this._toLayout.cellCollection();
+  var collection = this._toLayout ? this._toLayout.cellCollection() : this._toCellsCollection;
+  
   for(var i = 0, cell; cell = collection.cells[i]; i++){  
     var toValue = this._matchTo(cell);
     var dim = this._dim;
@@ -1456,7 +1698,7 @@ WordWraper.prototype.make = function() {
         var maxlines   = Math.floor(height / lineheight);
         var word;
         var sel        = d3.select(this);
-        var _x         = sel.attr("x") || 0;
+        var _x         = width/2; //sel.attr("x") || 0; //HACK? need to consider cenered vs left alligned etc.
         var _y         = sel.attr("y") || 0;
         sel.attr("x",null);
         sel.attr("y",null);
