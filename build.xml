@@ -7,7 +7,7 @@
 	</target>
 	<target name="copy">
         <copy todir="${lib.dest}" overwrite="true">        	
-             <fileset file="d2v.js" />
+            <fileset file="d2v.js" />
             <fileset file="d3v.js" />
         </copy>
 	</target>
