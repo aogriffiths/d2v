@@ -1,4 +1,8 @@
+//d3v.js Data Driven Document VIEWS 
+//Version 1
+
 /*
+
  * var body = d3.select("body");
  * 
  * 
